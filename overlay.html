@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STS2 Overlay</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;900&family=Crimson+Pro:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet">
+<style>
+  /* OBS requires a transparent background — never set a body background color */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: transparent;
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    font-family: 'Crimson Pro', serif;
+  }
+
+  /* ----------------------------------------------------------------
+     Notification container — bottom-left, stacks upward
+  ---------------------------------------------------------------- */
+  #notifications {
+    position: absolute;
+    bottom: 40px;
+    left: 40px;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 12px;
+    width: 480px;
+  }
+
+  /* ----------------------------------------------------------------
+     Base card
+  ---------------------------------------------------------------- */
+  .notif {
+    position: relative;
+    padding: 14px 18px 14px 56px;
+    border-radius: 4px;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateX(-30px);
+    animation: slideIn 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards,
+               fadeOut 0.5s ease-in forwards var(--duration, 6s);
+    backdrop-filter: blur(8px);
+    border-left: 3px solid var(--accent);
+    background: rgba(8, 6, 14, 0.82);
+    box-shadow: 0 4px 32px rgba(0,0,0,0.6), inset 0 0 40px rgba(0,0,0,0.2);
+  }
+
+  /* Shimmer sweep on entry */
+  .notif::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(105deg, transparent 40%, rgba(255,255,255,0.04) 50%, transparent 60%);
+    animation: shimmer 0.7s ease-out 0.3s forwards;
+    opacity: 0;
+  }
+
+  /* Left glow bar */
+  .notif::after {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: var(--accent);
+    box-shadow: 0 0 12px var(--accent), 0 0 24px var(--accent);
+  }
+
+  /* Icon slot */
+  .notif-icon {
+    position: absolute;
+    left: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 22px;
+    filter: drop-shadow(0 0 6px var(--accent));
+  }
+
+  .notif-label {
+    font-family: 'Cinzel', serif;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 3px;
+    opacity: 0.9;
+  }
+
+  .notif-title {
+    font-family: 'Cinzel', serif;
+    font-size: 15px;
+    font-weight: 900;
+    color: #f0ead8;
+    letter-spacing: 0.04em;
+    line-height: 1.2;
+    text-shadow: 0 0 20px rgba(255,255,255,0.15);
+  }
+
+  .notif-sub {
+    font-size: 13px;
+    color: #9b8f7a;
+    margin-top: 3px;
+    font-style: italic;
+    line-height: 1.3;
+  }
+
+  .notif-stat {
+    display: inline-block;
+    margin-top: 4px;
+    font-family: 'Cinzel', serif;
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.06em;
+  }
+
+  /* ----------------------------------------------------------------
+     Event type themes
+  ---------------------------------------------------------------- */
+  .notif-startup  { --accent: #4ec9c9; }   /* teal */
+  .notif-relic    { --accent: #c9963f; }   /* gold */
+  .notif-run-win  { --accent: #4ec97b; }   /* green */
+  .notif-run-loss { --accent: #c94e4e; }   /* red */
+  .notif-run-start{ --accent: #7b9fe8; }   /* blue */
+  .notif-act      { --accent: #b06de8; }   /* purple */
+  .notif-boss     { --accent: #e84e4e; }   /* red-hot */
+  .notif-elite    { --accent: #e8904e; }   /* orange */
+  .notif-card     { --accent: #4ec9c9; }   /* teal */
+
+  /* ----------------------------------------------------------------
+     Run end results panel — centered, full results screen
+  ---------------------------------------------------------------- */
+  #run-end-panel {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.92);
+    width: 540px;
+    background: rgba(8, 6, 14, 0.93);
+    border-radius: 6px;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+    box-shadow: 0 8px 64px rgba(0,0,0,0.8);
+  }
+
+  #run-end-panel.active {
+    animation: panelIn 0.5s cubic-bezier(0.22,1,0.36,1) forwards,
+               panelOut 0.6s ease-in forwards var(--panel-duration, 25s);
+  }
+
+  #run-end-panel .panel-header {
+    padding: 22px 28px 18px;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    position: relative;
+  }
+
+  #run-end-panel .panel-result {
+    font-family: 'Cinzel', serif;
+    font-size: 28px;
+    font-weight: 900;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  #run-end-panel .panel-sub {
+    font-family: 'Cinzel', serif;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    opacity: 0.6;
+  }
+
+  #run-end-panel .panel-timer {
+    position: absolute;
+    top: 22px;
+    right: 28px;
+    font-family: 'Cinzel', serif;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    opacity: 0.4;
+  }
+
+  #run-end-panel .panel-stats {
+    padding: 18px 28px 22px;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 14px 24px;
+  }
+
+  #run-end-panel .stat-block {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  #run-end-panel .stat-label {
+    font-family: 'Cinzel', serif;
+    font-size: 8px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    opacity: 0.45;
+  }
+
+  #run-end-panel .stat-value {
+    font-family: 'Cinzel', serif;
+    font-size: 18px;
+    font-weight: 600;
+    color: #f0ead8;
+    letter-spacing: 0.03em;
+  }
+
+  #run-end-panel .stat-value.accent {
+    color: var(--panel-accent);
+  }
+
+  #run-end-panel .panel-footer {
+    padding: 12px 28px 16px;
+    border-top: 1px solid rgba(255,255,255,0.07);
+    font-size: 12px;
+    color: rgba(255,255,255,0.35);
+    font-style: italic;
+    font-family: 'Crimson Pro', serif;
+  }
+
+  #run-end-panel .progress-bar {
+    position: absolute;
+    bottom: 0; left: 0;
+    height: 2px;
+    background: var(--panel-accent);
+    box-shadow: 0 0 8px var(--panel-accent);
+    animation: shrink linear forwards var(--panel-duration, 25s);
+    width: 100%;
+    transform-origin: left;
+  }
+
+  @keyframes panelIn {
+    to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  }
+  @keyframes panelOut {
+    to { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+  }
+  @keyframes shrink {
+    to { transform: scaleX(0); }
+  }
+  #win-flash {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(78,201,123,0.18) 0%, transparent 70%);
+    opacity: 0;
+  }
+  #win-flash.active {
+    animation: winPulse 2s ease-out forwards;
+  }
+
+  /* ----------------------------------------------------------------
+     Loss flash
+  ---------------------------------------------------------------- */
+  #loss-flash {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(201,78,78,0.22) 0%, transparent 65%);
+    opacity: 0;
+  }
+  #loss-flash.active {
+    animation: lossPulse 2.5s ease-out forwards;
+  }
+
+  /* ----------------------------------------------------------------
+     Boss warning — dramatic full-width banner
+  ---------------------------------------------------------------- */
+  #boss-banner {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    padding: 18px 40px;
+    background: linear-gradient(90deg, rgba(201,78,78,0.95) 0%, rgba(140,20,20,0.9) 50%, transparent 100%);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  #boss-banner.active {
+    animation: bannerDrop 0.5s cubic-bezier(0.22,1,0.36,1) forwards,
+               bannerFade 0.4s ease-in 5s forwards;
+  }
+  #boss-banner-icon { font-size: 32px; }
+  #boss-banner-text {
+    font-family: 'Cinzel', serif;
+    font-size: 13px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: rgba(255,220,220,0.9);
+  }
+  #boss-banner-name {
+    font-family: 'Cinzel', serif;
+    font-size: 22px;
+    font-weight: 900;
+    color: #fff;
+    letter-spacing: 0.06em;
+    text-shadow: 0 0 20px rgba(255,100,100,0.8);
+  }
+
+  /* ----------------------------------------------------------------
+     Keyframes
+  ---------------------------------------------------------------- */
+  @keyframes slideIn {
+    to { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes fadeOut {
+    to { opacity: 0; transform: translateX(-12px); }
+  }
+  @keyframes shimmer {
+    0%  { opacity: 1; transform: translateX(-100%); }
+    100%{ opacity: 1; transform: translateX(200%); }
+  }
+  @keyframes winPulse {
+    0%   { opacity: 0; }
+    15%  { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  @keyframes lossPulse {
+    0%   { opacity: 0; }
+    10%  { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  @keyframes bannerDrop {
+    to { transform: translateY(0); opacity: 1; }
+  }
+  @keyframes bannerFade {
+    to { opacity: 0; transform: translateY(-20px); }
+  }
+</style>
+</head>
+<body>
+
+<!-- Run end results panel (centered) -->
+<div id="run-end-panel">
+  <div class="panel-header">
+    <div class="panel-result" id="panel-result-text">—</div>
+    <div class="panel-sub" id="panel-sub-text">—</div>
+    <div class="panel-timer" id="panel-timer-text">—</div>
+    <div class="progress-bar"></div>
+  </div>
+  <div class="panel-stats" id="panel-stats"></div>
+  <div class="panel-footer" id="panel-footer"></div>
+</div>
+
+<!-- Full-screen flash effects -->
+<div id="win-flash"></div>
+<div id="loss-flash"></div>
+
+<!-- Boss banner (top of screen) -->
+<div id="boss-banner">
+  <div id="boss-banner-icon">💀</div>
+  <div>
+    <div id="boss-banner-text">Boss Encounter</div>
+    <div id="boss-banner-name">—</div>
+  </div>
+</div>
+
+<!-- Notification stack (bottom-left) -->
+<div id="notifications"></div>
+
+<script>
+  const WS_PORT = window.location.port || 5000;
+  const WS_URL  = `ws://localhost:${WS_PORT}/ws`;
+  const NOTIF_DURATION_MS = 6500;
+
+  // ----------------------------------------------------------------
+  // WebSocket with auto-reconnect
+  // ----------------------------------------------------------------
+  function connect() {
+    const ws = new WebSocket(WS_URL);
+
+    ws.onopen  = () => console.log('[overlay] connected');
+    ws.onclose = () => { console.log('[overlay] disconnected, retrying...'); setTimeout(connect, 3000); };
+    ws.onerror = (e) => console.error('[overlay] error', e);
+
+    ws.onmessage = ({ data }) => {
+      try { handleEvent(JSON.parse(data)); }
+      catch(e) { console.error('[overlay] bad event', e); }
+    };
+  }
+
+  // ----------------------------------------------------------------
+  // Event → UI
+  // ----------------------------------------------------------------
+  function handleEvent(ev) {
+    console.log('[overlay] event:', ev);
+
+    switch (ev.type) {
+      case 'relic':
+        showNotif('notif-relic', '🏺', 'Relic Acquired', ev.name,
+          ev.winrate != null
+            ? `${ev.winrate}% winrate  ·  ${ev.wins}/${ev.total} runs`
+            : null,
+          ev.flavour);
+        break;
+
+      case 'card':
+        showNotif('notif-card', '🃏', 'Card Picked', ev.name,
+          ev.stat || null,
+          ev.flavour,
+          ev.extra_stats || []);
+        break;
+
+      case 'run_start':
+        showNotif('notif-run-start', '⚔️', 'New Run', ev.character,
+          ev.winrate != null ? `${ev.winrate}% winrate  ·  ${ev.wins}/${ev.total} runs` : null,
+          ev.comment);
+        break;
+
+      case 'startup':
+        showNotif('notif-startup', '🟢', 'Bot Online',
+          `#${ev.channel}`,
+          `${ev.runs} runs tracked`,
+          null, [], 5000);
+        break;
+
+      case 'run_end':
+        showRunEndPanel(ev);
+        break;
+
+      case 'boss':
+        triggerBossBanner(ev.name);
+        break;
+
+      case 'elite':
+        showNotif('notif-elite', '⚠️', 'Elite Encounter', ev.name, null, null, [], 5000);
+        break;
+
+      case 'act':
+        showNotif('notif-act', '🗺️', `Act ${ev.act}`, ev.message || '', null, null, [], 5000);
+        break;
+    }
+  }
+
+  // ----------------------------------------------------------------
+  // Notification card factory
+  // ----------------------------------------------------------------
+  function showNotif(cssClass, icon, label, title, stat, sub, extraStats = [], duration = NOTIF_DURATION_MS) {
+    const container = document.getElementById('notifications');
+
+    const el = document.createElement('div');
+    el.className = `notif ${cssClass}`;
+    el.style.setProperty('--duration', `${duration}ms`);
+
+    const extraHtml = (extraStats || [])
+      .map(s => `<div class="notif-stat" style="opacity:0.75;font-size:10px">${s}</div>`)
+      .join('');
+
+    el.innerHTML = `
+      <div class="notif-icon">${icon}</div>
+      <div class="notif-label">${label}</div>
+      <div class="notif-title">${title}</div>
+      ${stat       ? `<div class="notif-stat">${stat}</div>`  : ''}
+      ${extraHtml}
+      ${sub        ? `<div class="notif-sub">${sub}</div>`    : ''}
+    `;
+
+    container.prepend(el);
+    setTimeout(() => el.remove(), duration + 600);
+  }
+
+  // ----------------------------------------------------------------
+  // Special effects
+  // ----------------------------------------------------------------
+  function triggerWinFlash() {
+    const el = document.getElementById('win-flash');
+    el.classList.remove('active');
+    void el.offsetWidth; // force reflow to restart animation
+    el.classList.add('active');
+  }
+
+  function triggerLossFlash() {
+    const el = document.getElementById('loss-flash');
+    el.classList.remove('active');
+    void el.offsetWidth;
+    el.classList.add('active');
+  }
+
+  function triggerBossBanner(name) {
+    const banner = document.getElementById('boss-banner');
+    document.getElementById('boss-banner-name').textContent = name;
+    banner.classList.remove('active');
+    void banner.offsetWidth;
+    banner.classList.add('active');
+  }
+
+  // ----------------------------------------------------------------
+  // Run end results panel
+  // ----------------------------------------------------------------
+  const PANEL_DURATION_MS = 25000;
+
+  function showRunEndPanel(ev) {
+    const win     = ev.victory;
+    const panel   = document.getElementById('run-end-panel');
+    const accent  = win ? '#4ec97b' : '#c94e4e';
+
+    // Trigger flash
+    win ? triggerWinFlash() : triggerLossFlash();
+
+    // Header
+    document.getElementById('panel-result-text').textContent =
+      win ? '✦  Victory  ✦' : '✦  Defeated  ✦';
+    document.getElementById('panel-result-text').style.color = accent;
+
+    const asc = ev.ascension > 0 ? `  ·  Ascension ${ev.ascension}` : '';
+    document.getElementById('panel-sub-text').textContent =
+      `${ev.character}${asc}  ·  Floor ${ev.floor}`;
+
+    document.getElementById('panel-timer-text').textContent =
+      ev.run_time_str || '';
+
+    // Stats grid
+    const stats = [];
+
+    if (win) {
+      if (ev.hp_note) {
+        stats.push({ label: 'Close Call', value: ev.hp_note, accent: true });
+      }
+    } else {
+      if (ev.killer) {
+        const killNote = ev.kill_count >= 2
+          ? `${ev.killer} (×${ev.kill_count})`
+          : ev.killer;
+        stats.push({ label: 'Killed By', value: killNote, accent: true });
+      }
+    }
+
+    if (ev.total_damage)      stats.push({ label: 'Damage Taken',    value: ev.total_damage });
+    if (ev.elites_fought)     stats.push({ label: 'Elites Fought',   value: ev.elites_fought });
+    if (ev.potions_used)      stats.push({ label: 'Potions Used',    value: ev.potions_used });
+
+    const restTotal = (ev.rest_heals || 0) + (ev.rest_smiths || 0);
+    if (restTotal > 0) {
+      stats.push({
+        label: 'Rest Sites',
+        value: `${ev.rest_heals || 0}× heal  ${ev.rest_smiths || 0}× smith`
+      });
+    }
+
+    if (ev.deck_size)         stats.push({ label: 'Final Deck',      value: `${ev.deck_size} cards` });
+    if (ev.relic_count)       stats.push({ label: 'Relics',          value: ev.relic_count });
+    if (ev.pick_rate != null) stats.push({ label: 'Card Pick Rate',  value: `${ev.pick_rate}%` });
+    if (ev.total_gold_earned) stats.push({ label: 'Gold Earned',     value: ev.total_gold_earned });
+
+    const grid = document.getElementById('panel-stats');
+    grid.innerHTML = stats.map(s => `
+      <div class="stat-block">
+        <div class="stat-label">${s.label}</div>
+        <div class="stat-value${s.accent ? ' accent' : ''}">${s.value}</div>
+      </div>
+    `).join('');
+
+    // Footer
+    document.getElementById('panel-footer').textContent =
+      win
+        ? `Seed: ${ev.seed || '?'}`
+        : `Floor ${ev.floor} of 48`;
+
+    // Animate
+    panel.style.setProperty('--panel-accent', accent);
+    panel.style.setProperty('--panel-duration', `${PANEL_DURATION_MS}ms`);
+    panel.classList.remove('active');
+
+    // Re-query progress bar so animation restarts cleanly
+    const bar = panel.querySelector('.progress-bar');
+    bar.style.animation = 'none';
+    void bar.offsetWidth;
+    bar.style.animation = '';
+
+    void panel.offsetWidth;
+    panel.classList.add('active');
+
+    setTimeout(() => panel.classList.remove('active'), PANEL_DURATION_MS + 700);
+  }
+
+  connect();
+</script>
+</body>
+</html>

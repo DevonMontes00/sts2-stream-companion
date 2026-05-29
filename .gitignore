@@ -1,0 +1,19 @@
+# Environment — contains Twitch OAuth token and Anthropic API key
+.env
+
+# Database — personal run data, not for sharing
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

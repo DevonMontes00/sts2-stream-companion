@@ -1,0 +1,7 @@
+watchdog==4.0.1
+twitchio==2.10.0
+python-dotenv==1.0.1
+fastapi==0.111.0
+uvicorn==0.29.0
+websockets==12.0
+anthropic>=0.25.0
