@@ -135,8 +135,8 @@
   #run-end-panel {
     position: absolute;
     top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(0.92);
+    right: 40px;
+    transform: translateY(-50%) scale(0.92);
     width: 540px;
     background: rgba(8, 6, 14, 0.93);
     border-radius: 6px;
@@ -238,10 +238,10 @@
   }
 
   @keyframes panelIn {
-    to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    to { opacity: 1; transform: translateY(-50%) scale(1); }
   }
   @keyframes panelOut {
-    to { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+    to { opacity: 0; transform: translateY(-50%) scale(0.96); }
   }
   @keyframes shrink {
     to { transform: scaleX(0); }
