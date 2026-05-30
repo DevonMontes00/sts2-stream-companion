@@ -31,6 +31,10 @@ log = logging.getLogger(__name__)
 
 app = FastAPI()
 
+# Set by the async startup handler once uvicorn's event loop is running.
+# start_server_thread() blocks on this so callers know the server is truly ready.
+_server_ready = threading.Event()
+
 # ---------------------------------------------------------------------------
 # Connection manager — tracks all connected overlay browser sources.
 # There's usually only one (OBS), but supporting multiple is free.
@@ -40,16 +44,24 @@ class ConnectionManager:
     def __init__(self):
         self._clients: list[WebSocket] = []
         self._lock = asyncio.Lock()
+        # Startup event stored here so late-connecting clients still see it.
+        self._startup_replay: dict | None = None
 
     async def connect(self, ws: WebSocket) -> None:
         await ws.accept()
         async with self._lock:
             self._clients.append(ws)
         log.info("Overlay connected (%d total)", len(self._clients))
+        if self._startup_replay:
+            try:
+                await ws.send_text(json.dumps(self._startup_replay))
+            except Exception:
+                pass
 
     async def disconnect(self, ws: WebSocket) -> None:
         async with self._lock:
-            self._clients.remove(ws)
+            if ws in self._clients:
+                self._clients.remove(ws)
         log.info("Overlay disconnected (%d remaining)", len(self._clients))
 
     async def broadcast(self, event: dict) -> None:
@@ -91,9 +103,11 @@ class EventBus:
 
     def push(self, event_type: str, data: dict[str, Any] = {}) -> None:
         if not self._loop or not self._loop.is_running():
-            log.debug("Event bus not ready, dropping: %s", event_type)
+            log.warning("Event bus not ready — dropping: %s", event_type)
             return
         event = {"type": event_type, **data}
+        if event_type == "startup":
+            manager._startup_replay = event
         asyncio.run_coroutine_threadsafe(
             manager.broadcast(event), self._loop
         )
@@ -110,6 +124,7 @@ event_bus = EventBus()
 @app.on_event("startup")
 async def startup():
     event_bus.set_loop(asyncio.get_running_loop())
+    _server_ready.set()
     log.info("Overlay server ready — WebSocket at ws://localhost:5000/ws")
 
 
@@ -137,8 +152,9 @@ async def serve_overlay():
 
 def start_server_thread(host: str = "127.0.0.1", port: int = 5000) -> int:
     """
-    Start uvicorn in a daemon thread. Returns the port actually used.
-    Tries the requested port first, then increments until one is free.
+    Start uvicorn in a daemon thread. Blocks until the server is genuinely
+    ready to accept connections before returning, so callers can rely on the
+    event bus being live immediately after this returns.
     """
     import socket
 
@@ -170,5 +186,10 @@ def start_server_thread(host: str = "127.0.0.1", port: int = 5000) -> int:
         daemon=True,
     )
     thread.start()
-    log.info("Overlay server started at http://%s:%d", host, port)
+
+    if not _server_ready.wait(timeout=10):
+        log.warning("Overlay server did not become ready within 10s.")
+    else:
+        log.info("Overlay server ready at http://%s:%d", host, port)
+
     return port

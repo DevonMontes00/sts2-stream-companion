@@ -40,6 +40,7 @@ def _get_client() -> Optional[anthropic.Anthropic]:
     if _client is None:
         key = os.getenv("ANTHROPIC_API_KEY", "").strip()
         if not key:
+            log.warning("ANTHROPIC_API_KEY not set — AI commentary disabled, using static fallback.")
             return None
         _client = anthropic.Anthropic(api_key=key)
     return _client
@@ -80,7 +81,7 @@ def generate(prompt: str, fallback: str, timeout: float = DEFAULT_TIMEOUT) -> st
 
     def _call() -> str:
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=100,   # ~200 chars is well under 100 tokens
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
@@ -93,9 +94,9 @@ def generate(prompt: str, fallback: str, timeout: float = DEFAULT_TIMEOUT) -> st
         log.debug("AI message: %s", result)
         return result
     except FuturesTimeout:
-        log.debug("AI timed out after %.1fs — using fallback.", timeout)
+        log.warning("AI timed out after %.1fs — using fallback.", timeout)
         future.cancel()
         return fallback
     except Exception as e:
-        log.debug("AI call failed (%s) — using fallback.", e)
+        log.warning("AI call failed (%s) — using fallback.", e)
         return fallback

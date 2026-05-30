@@ -62,9 +62,13 @@ class RunState:
     # {player_index: list of CardState}
     cards:  dict = field(default_factory=dict)
 
-    # Current room info — None until a room is entered
-    current_room_type:  Optional[str] = None
-    current_room_model: Optional[str] = None
+    # Current room info — None until a room is entered.
+    # current_coord is the (col, row) of the last visited map node and is
+    # the authoritative signal for room-entry detection. current_room_type
+    # and current_room_model are derived from it via saved_map.
+    current_coord:      Optional[tuple] = None
+    current_room_type:  Optional[str]   = None
+    current_room_model: Optional[str]   = None
 
 
 # ---------------------------------------------------------------------------
@@ -92,16 +96,49 @@ def _parse_active_run(path: Path, text: Optional[str] = None) -> Optional[RunSta
     else:
         state.act = 1
 
-    # ---- Current room: pre_finished_room fires on room ENTRY ----------
-    # This field is populated when you walk into a room and cleared when
-    # you leave. It's the only field that updates before combat starts.
-    pre = data.get("pre_finished_room")
-    if pre and pre.get("is_pre_finished"):
-        state.current_room_type  = pre.get("room_type")
-        state.current_room_model = pre.get("encounter_id")
-    else:
-        state.current_room_type  = None
-        state.current_room_model = None
+    # ---- Current room via visited_map_coords + saved_map -----------------
+    # visited_map_coords gains a new entry the moment the player selects a
+    # room node on the map — before combat starts. Cross-referencing the
+    # last coord against the current act's saved_map gives us the room type.
+    # This is more reliable than pre_finished_room, which is always null in
+    # practice (never observed populated in real save files).
+    visited    = data.get("visited_map_coords", [])
+    act_index  = data.get("current_act_index", 0)
+    acts       = data.get("acts", [])
+
+    state.current_coord      = None
+    state.current_room_type  = None
+    state.current_room_model = None
+
+    if visited and acts and act_index < len(acts):
+        act        = acts[act_index]
+        saved_map  = act.get("saved_map", {})
+        rooms_data = act.get("rooms", {})
+
+        # Build (col, row) → room-type lookup from the saved map
+        coord_type: dict[tuple, str] = {}
+        for pt in saved_map.get("points", []):
+            c = pt.get("coord", {})
+            coord_type[(c.get("col"), c.get("row"))] = pt.get("type", "")
+        boss_pt = saved_map.get("boss", {})
+        if boss_pt:
+            bc = boss_pt.get("coord", {})
+            coord_type[(bc.get("col"), bc.get("row"))] = "boss"
+
+        last       = visited[-1]
+        last_coord = (last.get("col"), last.get("row"))
+        room_type  = coord_type.get(last_coord)
+
+        state.current_coord     = last_coord
+        state.current_room_type = room_type
+
+        if room_type == "elite":
+            n         = rooms_data.get("elite_encounters_visited", 0)
+            elite_ids = rooms_data.get("elite_encounter_ids", [])
+            if n < len(elite_ids):
+                state.current_room_model = elite_ids[n]
+        elif room_type == "boss":
+            state.current_room_model = rooms_data.get("boss_id")
 
     # ---- Per-player state ---------------------------------------------
     for i, player in enumerate(data.get("players", [])):
@@ -214,6 +251,13 @@ class ActiveRunWatcher:
             if new.floor == 0 and new.character:
                 msg = triggers.on_run_start(new.character, new.ascension or 0)
                 self._maybe_post(msg)
+                # Announce starting relics (Neow's gifts) by diffing against
+                # empty. Cards are skipped — announcing the whole starting deck
+                # is too noisy.
+                for idx, current_relics in new.relics.items():
+                    for relic_id in sorted(current_relics):
+                        msg = triggers.on_relic_acquired(relic_id)
+                        self._maybe_post(msg)
             # Set baseline to current state — diffs start from next change
             self._last_state = new
             return
@@ -225,7 +269,7 @@ class ActiveRunWatcher:
         # the file multiple times without changing game state.
         state_unchanged = (
             new.floor               == old.floor
-            and new.current_room_model == old.current_room_model
+            and new.current_coord      == old.current_coord
             and new.relics              == old.relics
             and all(
                 sorted((c.card_id, c.upgrade_level) for c in new.cards.get(i, []))
@@ -258,6 +302,7 @@ class ActiveRunWatcher:
                 act=new.act,
                 relics={i: set()                for i in new.relics},
                 cards ={i: list(new.cards[i])   for i in new.cards},
+                current_coord=None,
                 current_room_type=None,
                 current_room_model=None,
             )
@@ -272,9 +317,12 @@ class ActiveRunWatcher:
 
         # ----------------------------------------------------------------
         # Boss / Elite room entry
-        # New room = model changed AND it's a combat room type
+        # Trigger on coord change, not model change. After a fight completes,
+        # elite_encounters_visited increments which changes current_room_model
+        # even though the player hasn't moved — triggering on model would fire
+        # a false "new elite" event after every elite victory.
         # ----------------------------------------------------------------
-        if old and new.current_room_model != old.current_room_model:
+        if old and new.current_coord != old.current_coord and new.current_coord is not None:
             room_type  = new.current_room_type
             room_model = new.current_room_model
 
