@@ -55,6 +55,9 @@ def on_run_start(character: str, ascension: int) -> str:
     stats     = database.character_stats(character)
     char_name = _fmt_id(character)
 
+    # Reset the run journal so this run starts with a clean slate
+    ai_commentary.reset_run(char_name, ascension)
+
     # Build static fallback
     if not stats or stats["total_runs"] < MIN_SAMPLE_SIZE:
         fallback = f"First few runs with {char_name} — no real data yet. Let's see how this goes."
@@ -104,7 +107,7 @@ def on_run_start(character: str, ascension: int) -> str:
             f"Write one short hype or skeptical Twitch chat message."
         )
 
-    return ai_commentary.generate(prompt, fallback)
+    return ai_commentary.generate(prompt, fallback, event_label=f"run start: {char_name} A{ascension}")
 
 
 def on_relic_acquired(relic_id: str) -> str | None:
@@ -141,7 +144,7 @@ def on_relic_acquired(relic_id: str) -> str | None:
         f"Reference the specific winrate. Be direct."
     )
 
-    return ai_commentary.generate(prompt, fallback)
+    return ai_commentary.generate(prompt, fallback, event_label=f"relic: {relic_name}")
 
 
 def on_boss_encounter(encounter_id: str) -> str | None:
@@ -163,7 +166,7 @@ def on_boss_encounter(encounter_id: str) -> str | None:
         f"{'Reference that this boss has been deadly before.' if kill_count >= 2 else 'Keep it brief.'}"
     )
 
-    return ai_commentary.generate(prompt, fallback)
+    return ai_commentary.generate(prompt, fallback, event_label=f"boss: {boss_name}")
 
 
 def on_run_end(run: dict, players: list) -> str:
@@ -231,7 +234,9 @@ def on_run_end(run: dict, players: list) -> str:
             f"{'This enemy has killed them multiple times.' if kill_count >= 2 else ''}"
         )
 
-    return ai_commentary.generate(prompt, fallback)
+    outcome    = "WIN" if run.get("victory") else f"LOSS to {_fmt_id(run.get('killed_by_encounter', 'unknown'))}"
+    event_label = f"run end: {outcome} on floor {floor}"
+    return ai_commentary.generate(prompt, fallback, event_label=event_label)
 
 
 # ---------------------------------------------------------------------------

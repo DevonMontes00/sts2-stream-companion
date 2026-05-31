@@ -114,15 +114,16 @@ def run_exists(run_id: str) -> bool:
     return row is not None
 
 
-def insert_run(parsed: dict, raw_json: str) -> None:
+def insert_run(parsed: dict, raw_json: str) -> bool:
     """
     Write a fully parsed run (with players, cards, relics) to the DB.
     Everything in one transaction — either all lands or nothing does.
+    Returns True if the run was newly inserted, False if it already existed.
     """
     run_id = parsed["run_id"]
     if run_exists(run_id):
         log.debug("Run %s already in DB — skipping.", run_id)
-        return
+        return False
 
     now = datetime.utcnow().isoformat()
 
@@ -210,6 +211,7 @@ def insert_run(parsed: dict, raw_json: str) -> None:
         "WIN" if parsed.get("victory") else "LOSS",
         player_summaries,
     )
+    return True
 
 
 # ---------------------------------------------------------------------------

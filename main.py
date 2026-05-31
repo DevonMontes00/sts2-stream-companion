@@ -69,12 +69,12 @@ def make_run_end_callback(post_fn: Optional[Callable[[str], None]]) -> Callable:
             if result is None:
                 return
             parsed, raw_json = result
-            database.insert_run(parsed, raw_json)
+            is_new_run = database.insert_run(parsed, raw_json)
 
             # Attach raw_json so on_run_end can parse aggregate stats
             parsed["raw_json"] = raw_json
 
-            if post_fn and parsed.get("players"):
+            if post_fn and is_new_run and parsed.get("players"):
                 msg = triggers.on_run_end(parsed, parsed["players"])
                 post_fn(msg)
 
@@ -122,6 +122,7 @@ def main() -> None:
 
     # ---- Twitch bot --------------------------------------------------
     post_fn: Optional[Callable[[str], None]] = None
+    bot = None
 
     if not args.no_bot and not args.backfill:
         try:
@@ -145,6 +146,7 @@ def main() -> None:
     history_watcher.start()
 
     # ---- Active run watcher ------------------------------------------
+    active_watcher = None
     try:
         from active_run import ActiveRunWatcher
         active_watcher = ActiveRunWatcher(
@@ -155,11 +157,25 @@ def main() -> None:
     except Exception as e:
         log.warning("Active run watcher failed to start: %s", e)
 
+    # ---- Chat commands -----------------------------------------------
+    if bot and active_watcher and not args.backfill:
+        try:
+            from chat_commands import RunCommandsCog
+            bot.add_cog(RunCommandsCog(bot, active_watcher))
+            log.info("Chat commands registered: !run !deck !relics !stats !wr")
+        except Exception as e:
+            log.warning("Failed to register chat commands: %s", e)
+
     # ---- Keep alive --------------------------------------------------
     try:
         log.info("Running. Press Ctrl+C to stop.")
         # Brief pause to let the bot finish connecting before posting startup
         time.sleep(2)
+        if post_fn:
+            run_count = database.get_connection().execute(
+                "SELECT COUNT(*) FROM runs"
+            ).fetchone()[0]
+            post_fn(f"STS2 watcher online — {run_count} runs tracked. Let's go! PogChamp")
         if _event_bus := triggers._event_bus:
             from config import TWITCH_CHANNEL
             _event_bus.push("startup", {

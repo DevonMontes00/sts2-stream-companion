@@ -7,35 +7,37 @@ Design:
     static message. If the API is slow or down, the stream never notices.
   - The system prompt is deliberately tight: one message, max 200 chars,
     specific tone, no filler. Vague prompts produce generic output.
+  - A RunJournal tracks what happened this run and what the bot said, so
+    each AI call has narrative context rather than treating events in isolation.
 
 Threading model:
   Watchdog thread → triggers.py → generate() → submits to pool → waits timeout
   If response arrives in time  → return AI message
   If timeout / error           → return fallback string silently
+  Journal reads happen inside the pool thread; writes happen on the watchdog
+  thread. A lock guards all journal access.
 """
 
 import logging
 import os
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from dataclasses import dataclass, field
 from typing import Optional
 
 import anthropic
 
 log = logging.getLogger(__name__)
 
-# One persistent client, one small thread pool.
-# Two workers is enough — we never fire more than one AI call at a time,
-# but a second worker handles the rare case of overlapping events.
 _client: Optional[anthropic.Anthropic] = None
 _pool   = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ai-commentary")
 
-# How long to wait for the API before using the fallback (seconds).
-# Anthropic responses are usually under 2s; 4s gives comfortable headroom.
 DEFAULT_TIMEOUT = 4.0
+_JOURNAL_MAX_ENTRIES = 8  # how many past events to include in context
 
 
 def _get_client() -> Optional[anthropic.Anthropic]:
-    """Lazy-init the client. Returns None if no API key is configured."""
     global _client
     if _client is None:
         key = os.getenv("ANTHROPIC_API_KEY", "").strip()
@@ -47,9 +49,74 @@ def _get_client() -> Optional[anthropic.Anthropic]:
 
 
 # ---------------------------------------------------------------------------
-# System prompt — loaded once, shared across all calls.
-# Keeping it focused produces much tighter output than a long prompt.
+# Run journal — tracks narrative context across a single run
 # ---------------------------------------------------------------------------
+
+@dataclass
+class _JournalEntry:
+    event:   str  # short label, e.g. "relic: Burning Blood"
+    comment: str  # what the bot actually said
+
+
+class RunJournal:
+    """
+    Accumulates key events and bot comments for the current run.
+
+    Thread-safe: all access is guarded by a lock because generate() reads the
+    journal from a pool thread while triggers.py writes from the watchdog thread.
+    """
+
+    def __init__(self) -> None:
+        self._lock:       threading.Lock         = threading.Lock()
+        self._character:  Optional[str]          = None
+        self._ascension:  Optional[int]          = None
+        self._start_time: Optional[float]        = None
+        self._entries:    list[_JournalEntry]    = []
+
+    def reset(self, character: str, ascension: int) -> None:
+        with self._lock:
+            self._character  = character
+            self._ascension  = ascension
+            self._start_time = time.monotonic()
+            self._entries    = []
+        log.debug("RunJournal reset for %s A%s", character, ascension)
+
+    def add(self, event: str, comment: str) -> None:
+        with self._lock:
+            self._entries.append(_JournalEntry(event, comment))
+            if len(self._entries) > _JOURNAL_MAX_ENTRIES:
+                self._entries = self._entries[-_JOURNAL_MAX_ENTRIES:]
+
+    def get_context(self) -> str:
+        """Return a compact, prompt-ready summary of the current run so far."""
+        with self._lock:
+            if not self._character:
+                return ""
+
+            elapsed_min = int((time.monotonic() - self._start_time) / 60) if self._start_time else 0
+            header = f"Run so far ({self._character} A{self._ascension}, {elapsed_min}min in):"
+
+            if not self._entries:
+                return header
+
+            lines = [header]
+            for entry in self._entries:
+                lines.append(f'- [{entry.event}] "{entry.comment}"')
+            return "\n".join(lines)
+
+
+_journal = RunJournal()
+
+
+def reset_run(character: str, ascension: int) -> None:
+    """Call this at the start of each new run to clear stale context."""
+    _journal.reset(character, ascension)
+
+
+# ---------------------------------------------------------------------------
+# System prompt
+# ---------------------------------------------------------------------------
+
 SYSTEM_PROMPT = """You are a dry, self-aware Twitch chat bot for a Slay the Spire 2 streamer.
 
 Rules:
@@ -58,45 +125,57 @@ Rules:
 - No hashtags. No asterisks. No markdown.
 - Be specific about any stats or numbers provided — vague comments are worthless.
 - Tone: knowledgeable, occasionally sarcastic, always brief. Think "friend who knows the game well and isn't afraid to call out bad decisions."
+- If run context is provided, use it to stay consistent with your previous comments and avoid repeating yourself.
 - Do NOT start with "I" or repeat the stat back verbatim.
 - Output only the message text. Nothing else."""
 
 
-def generate(prompt: str, fallback: str, timeout: float = DEFAULT_TIMEOUT) -> str:
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def generate(prompt: str, fallback: str, event_label: str = "", timeout: float = DEFAULT_TIMEOUT) -> str:
     """
     Generate an AI commentary message.
 
     Args:
-        prompt:   The user-facing context prompt (what just happened + stats).
-        fallback: The static message to return if AI is unavailable or slow.
-        timeout:  Seconds to wait before falling back.
+        prompt:      The event context (what just happened + relevant stats).
+        fallback:    Static message to return if AI is unavailable or slow.
+        event_label: Short label recorded in the run journal, e.g. "relic: Burning Blood".
+                     Pass an empty string to skip journal recording (e.g. run_end).
+        timeout:     Seconds to wait before falling back.
 
     Returns:
         Either the AI-generated string or the fallback.
     """
     client = _get_client()
     if client is None:
-        log.debug("No ANTHROPIC_API_KEY configured — using static fallback.")
         return fallback
+
+    context    = _journal.get_context()
+    full_prompt = f"{context}\n\n{prompt}" if context else prompt
 
     def _call() -> str:
         response = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=100,   # ~200 chars is well under 100 tokens
+            max_tokens=100,
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": full_prompt}],
         )
         return response.content[0].text.strip()
 
     future = _pool.submit(_call)
+    result = fallback
     try:
         result = future.result(timeout=timeout)
         log.debug("AI message: %s", result)
-        return result
     except FuturesTimeout:
         log.warning("AI timed out after %.1fs — using fallback.", timeout)
         future.cancel()
-        return fallback
     except Exception as e:
         log.warning("AI call failed (%s) — using fallback.", e)
-        return fallback
+
+    if event_label:
+        _journal.add(event_label, result)
+
+    return result

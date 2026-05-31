@@ -228,6 +228,10 @@ class ActiveRunWatcher:
         )
         self._observer.schedule(handler, str(saves_dir), recursive=False)
 
+    @property
+    def current_state(self) -> Optional[RunState]:
+        return self._last_state
+
     def start(self) -> None:
         if not self._saves_dir.exists():
             log.warning("Saves dir not found: %s — active run watching disabled.", self._saves_dir)
