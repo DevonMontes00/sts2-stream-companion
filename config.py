@@ -44,3 +44,16 @@ MIN_SAMPLE_SIZE = int(os.getenv("MIN_SAMPLE_SIZE", "3"))
 
 # Seconds between messages to avoid chat spam.
 MESSAGE_COOLDOWN = float(os.getenv("MESSAGE_COOLDOWN", "3.0"))
+
+# Twitch Predictions (optional)
+# Requires a user access token with channel:manage:predictions scope.
+# Get your broadcaster's numeric user ID from https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/
+# Get a token with the required scopes from https://twitchapps.com/tokengen/
+TWITCH_CLIENT_ID        = os.getenv("TWITCH_CLIENT_ID", "").strip()
+TWITCH_BROADCASTER_ID   = os.getenv("TWITCH_BROADCASTER_ID", "").strip()
+# OAuth token WITHOUT the 'oauth:' prefix; must have channel:manage:predictions scope
+TWITCH_BROADCASTER_TOKEN = os.getenv("TWITCH_BROADCASTER_TOKEN", "").strip()
+
+PREDICTIONS_ENABLED = bool(
+    TWITCH_CLIENT_ID and TWITCH_BROADCASTER_ID and TWITCH_BROADCASTER_TOKEN
+)

@@ -26,6 +26,7 @@ import twitchio
 from twitchio.ext import commands
 
 import config
+from predictions import PredictionManager
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +43,18 @@ class STS2Bot(commands.Bot):
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._connected = threading.Event()  # signals when bot is ready to post
         self._last_post_time: float = 0
+
+        self._prediction_mgr: Optional[PredictionManager] = (
+            PredictionManager(
+                client_id=config.TWITCH_CLIENT_ID,
+                broadcaster_id=config.TWITCH_BROADCASTER_ID,
+                token=config.TWITCH_BROADCASTER_TOKEN,
+            )
+            if config.PREDICTIONS_ENABLED
+            else None
+        )
+        if self._prediction_mgr:
+            log.info("Twitch predictions enabled (broadcaster_id=%s)", config.TWITCH_BROADCASTER_ID)
 
     # ------------------------------------------------------------------
     # twitchio lifecycle events
@@ -90,6 +103,31 @@ class STS2Bot(commands.Bot):
             log.debug("Posted to #%s: %s", config.TWITCH_CHANNEL, message)
         else:
             log.warning("Channel %s not found — message dropped.", config.TWITCH_CHANNEL)
+
+    # ------------------------------------------------------------------
+    # Prediction API — thread-safe, callable from any thread
+    # ------------------------------------------------------------------
+
+    def create_prediction(self, boss_name: str) -> None:
+        """Open a Twitch prediction for a boss fight. Thread-safe."""
+        if self._prediction_mgr and self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                self._prediction_mgr.create(boss_name), self._loop
+            )
+
+    def resolve_prediction(self, won: bool) -> None:
+        """Resolve the active prediction. Thread-safe."""
+        if self._prediction_mgr and self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                self._prediction_mgr.resolve(won), self._loop
+            )
+
+    def cancel_prediction(self) -> None:
+        """Cancel the active prediction (e.g. new run started). Thread-safe."""
+        if self._prediction_mgr and self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                self._prediction_mgr.cancel(), self._loop
+            )
 
 
 def start_bot_thread() -> STS2Bot:

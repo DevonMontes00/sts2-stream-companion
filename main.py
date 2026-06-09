@@ -62,7 +62,10 @@ def find_history_dir() -> Path:
     raise FileNotFoundError(f"Could not find history folder under {base}.")
 
 
-def make_run_end_callback(post_fn: Optional[Callable[[str], None]]) -> Callable:
+def make_run_end_callback(
+    post_fn: Optional[Callable[[str], None]],
+    resolve_prediction_fn: Optional[Callable[[bool], None]] = None,
+) -> Callable:
     def callback(path: Path) -> None:
         try:
             result = run_parser.parse_run_file(path)
@@ -77,6 +80,11 @@ def make_run_end_callback(post_fn: Optional[Callable[[str], None]]) -> Callable:
             if post_fn and is_new_run and parsed.get("players"):
                 msg = triggers.on_run_end(parsed, parsed["players"])
                 post_fn(msg)
+                # Resolve any open boss prediction.
+                # Non-final boss wins are already resolved by the act-transition
+                # signal, so resolve() is a no-op in those cases.
+                if resolve_prediction_fn:
+                    resolve_prediction_fn(bool(parsed.get("victory")))
 
         except Exception as e:
             log.error("Failed to process %s: %s", path.name, e, exc_info=True)
@@ -133,8 +141,9 @@ def main() -> None:
             log.warning("Could not start Twitch bot: %s", e)
 
     # ---- History watcher ---------------------------------------------
-    db_only_callback  = make_run_end_callback(post_fn=None)
-    live_callback     = make_run_end_callback(post_fn=post_fn)
+    resolve_fn = bot.resolve_prediction if bot else None
+    db_only_callback = make_run_end_callback(post_fn=None)
+    live_callback    = make_run_end_callback(post_fn=post_fn, resolve_prediction_fn=resolve_fn)
 
     history_watcher = RunWatcher(watch_dir=history_dir, callback=live_callback)
     history_watcher.process_existing(callback=db_only_callback)
@@ -152,6 +161,9 @@ def main() -> None:
         active_watcher = ActiveRunWatcher(
             saves_dir=saves_dir,
             post_fn=post_fn or (lambda msg: None),
+            create_prediction_fn=bot.create_prediction if bot else None,
+            resolve_prediction_fn=bot.resolve_prediction if bot else None,
+            cancel_prediction_fn=bot.cancel_prediction if bot else None,
         )
         active_watcher.start()
     except Exception as e:

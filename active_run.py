@@ -214,11 +214,30 @@ def _diff_cards(old_cards: list[CardState], new_cards: list[CardState]) -> tuple
 # Watcher
 # ---------------------------------------------------------------------------
 
+def _fmt_boss_name(raw_id: str) -> str:
+    """Human-readable boss name from a raw encounter ID."""
+    for prefix in ("ENCOUNTER.", "RELIC.", "CARD.", "CHARACTER.", "ENCHANTMENT."):
+        if raw_id.startswith(prefix):
+            raw_id = raw_id[len(prefix):]
+            break
+    return raw_id.replace("_", " ").title()
+
+
 class ActiveRunWatcher:
 
-    def __init__(self, saves_dir: Path, post_fn: Callable[[str], None]):
-        self._saves_dir = saves_dir
-        self._post      = post_fn
+    def __init__(
+        self,
+        saves_dir: Path,
+        post_fn: Callable[[str], None],
+        create_prediction_fn: Optional[Callable[[str], None]] = None,
+        resolve_prediction_fn: Optional[Callable[[bool], None]] = None,
+        cancel_prediction_fn: Optional[Callable[[], None]] = None,
+    ):
+        self._saves_dir           = saves_dir
+        self._post                = post_fn
+        self._create_prediction   = create_prediction_fn
+        self._resolve_prediction  = resolve_prediction_fn
+        self._cancel_prediction   = cancel_prediction_fn
         self._last_state: Optional[RunState] = None
         self._observer  = Observer()
 
@@ -296,6 +315,8 @@ class ActiveRunWatcher:
         )
 
         if is_new_run and new.character:
+            if self._cancel_prediction:
+                self._cancel_prediction()
             msg = triggers.on_run_start(new.character, new.ascension or 0)
             self._maybe_post(msg)
             # Reset baseline so diffs start fresh for the new run
@@ -313,11 +334,14 @@ class ActiveRunWatcher:
             self._last_state = old
 
         # ----------------------------------------------------------------
-        # Act transition
+        # Act transition — also resolves the boss prediction as a WIN,
+        # since you can only reach the next act by defeating the boss.
         # ----------------------------------------------------------------
         if old and new.act > old.act:
             msg = triggers.on_act_transition(new.act, new.character or "")
             self._maybe_post(msg)
+            if self._resolve_prediction:
+                self._resolve_prediction(True)
 
         # ----------------------------------------------------------------
         # Boss / Elite room entry
@@ -333,6 +357,8 @@ class ActiveRunWatcher:
             if room_type == "boss" and room_model:
                 msg = triggers.on_boss_encounter(room_model)
                 self._maybe_post(msg)
+                if self._create_prediction:
+                    self._create_prediction(_fmt_boss_name(room_model))
 
             elif room_type == "elite" and room_model:
                 msg = triggers.on_elite_encounter(room_model)
